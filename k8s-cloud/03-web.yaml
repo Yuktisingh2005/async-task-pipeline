@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: async-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: 753086500241.dkr.ecr.us-east-1.amazonaws.com/async-pipeline-web:latest
+          command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: pipeline-config
+            - secretRef:
+                name: pipeline-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: async-pipeline
+spec:
+  type: LoadBalancer
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 8000

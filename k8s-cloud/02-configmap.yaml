@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipeline-config
+  namespace: async-pipeline
+data:
+  DJANGO_DEBUG: "False"
+  DJANGO_ALLOWED_HOSTS: "*"
+  POSTGRES_DB: "pipeline"
+  POSTGRES_USER: "pipeline"
+  POSTGRES_HOST: "async-pipeline-db.cap6w8ki8ay1.us-east-1.rds.amazonaws.com"
+  POSTGRES_PORT: "5432"
+  CELERY_BROKER_URL: "redis://async-pipeline-redis.yjtcwk.0001.use1.cache.amazonaws.com:6379/0"
+  AWS_STORAGE_BUCKET_NAME: "async-pipeline-media-2b72243f"
+  AWS_S3_REGION_NAME: "us-east-1"

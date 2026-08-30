@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: async-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: async-task-pipeline-web:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: pipeline-config
+            - secretRef:
+                name: pipeline-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: async-pipeline
+spec:
+  selector:
+    app: web
+  ports:
+    - port: 8000
+      targetPort: 8000

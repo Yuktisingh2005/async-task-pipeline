@@ -1,0 +1,16 @@
+prometheus:
+  url: http://monitoring-kube-prometheus-prometheus.monitoring.svc
+  port: 9090
+  path: ""
+
+rules:
+  external:
+    - seriesQuery: 'redis_key_size{namespace="async-pipeline",key="celery"}'
+      resources:
+        overrides:
+          namespace:
+            resource: "namespace"
+      name:
+        matches: "redis_key_size"
+        as: "celery_queue_depth"
+      metricsQuery: 'redis_key_size{<<.LabelMatchers>>}'

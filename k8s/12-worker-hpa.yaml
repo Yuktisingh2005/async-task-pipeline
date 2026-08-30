@@ -1,0 +1,28 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: async-pipeline
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 1
+  maxReplicas: 8
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 0
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: celery_queue_depth
+          selector:
+            matchLabels:
+              namespace: async-pipeline
+        target:
+          type: AverageValue
+          averageValue: "5"

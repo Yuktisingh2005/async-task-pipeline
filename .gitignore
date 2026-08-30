@@ -1,0 +1,29 @@
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+
+# Env files - contain real secrets
+backend/.env
+frontend/.env.local
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# Terraform - state files contain real secrets (DB passwords, IAM keys)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+
+# Kubernetes cloud manifests contain real secrets/endpoints
+k8s-cloud/01-secret.yaml
+
+# Misc
+.DS_Store
+worker_log.txt
