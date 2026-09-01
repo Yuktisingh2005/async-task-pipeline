@@ -1,0 +1,156 @@
+# Async Task Pipeline with Observability
+
+A production-shaped async task processing system: a Django/DRF API that offloads heavy work (image resizing, PDF generation, scheduled cleanup) to Celery workers via Redis, with a live-updating Next.js dashboard, full observability (Flower, Prometheus, Grafana), Kubernetes autoscaling driven by a custom queue-depth metric, and a real deployment to AWS (EKS, RDS, ElastiCache, S3) provisioned with Terraform.
+
+> 📹 **[Demo video](#)** — add your video link/embed here
+> 🌐 **[Live AWS demo](#)** — add your LoadBalancer URL here if still running (see [Cost note](#cost-note))
+
+---
+
+## What this demonstrates
+
+Most portfolio projects show a CRUD app. This one shows the operational side of backend engineering:
+
+- **Async processing** — API responds instantly; work happens in background workers
+- **Scheduled jobs** — a separate scheduler (Celery beat) fires recurring cleanup independent of user requests
+- **Containerization** — the full stack runs identically via one `docker compose up`
+- **Container orchestration** — each role (web/worker/beat) is an independently scalable Kubernetes Deployment
+- **Observability** — real dashboards (Grafana) showing queue depth reacting to load in real time
+- **Autoscaling on a business metric** — not CPU, but actual queue depth, via a custom Prometheus Adapter + HPA
+- **Infrastructure as Code** — the entire cloud footprint (VPC, EKS, RDS, ElastiCache, S3, IAM) is Terraform, not console clicks
+- **Real cloud deployment** — a public, internet-reachable URL backed by managed AWS services, not just `localhost`
+
+---
+
+## Architecture
+
+### Application
+
+![Application architecture](architecture-app.png)
+
+**Request flow:** the frontend calls the Django API, which writes a `Task` row to PostgreSQL and enqueues a job onto Redis — then returns immediately. A Celery worker (running as a separate process/pod) picks the job off Redis, executes it, and writes the result back to PostgreSQL and S3. Celery beat runs independently on a timer, firing scheduled cleanup with no user involvement.
+
+### Cloud infrastructure
+
+![AWS infrastructure](architecture-aws.png)
+
+The application runs on a 3-node EKS cluster inside a VPC with public/private subnets. PostgreSQL and Redis are **not** run as pods — they're managed AWS services (RDS, ElastiCache) reached over the private network. Uploaded/generated files live in S3, not on any single pod's local disk, so any worker pod can read a file another pod wrote.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| **Backend** | Django, Django REST Framework, Celery, Python |
+| **Frontend** | Next.js, TypeScript, Tailwind CSS v4, Framer Motion |
+| **Data** | PostgreSQL, Redis |
+| **File storage** | AWS S3 (via `django-storages`) |
+| **Containers** | Docker, Docker Compose |
+| **Orchestration** | Kubernetes (Deployments, Services, Jobs, HPA, ConfigMaps/Secrets) |
+| **Observability** | Flower, Prometheus, Grafana, `redis_exporter`, Prometheus Adapter |
+| **Cloud** | AWS EKS, RDS, ElastiCache, S3, ECR, VPC, IAM |
+| **Infrastructure as Code** | Terraform |
+
+---
+
+## The three task types
+
+| Type | What it does |
+|---|---|
+| **PDF Report** | Generates a PDF. If a CSV is uploaded, its contents are rendered as a styled table; otherwise a placeholder report is generated. |
+| **Image Resize** | Resizes an uploaded image into a 300×300 thumbnail. |
+| **Cleanup** | Manually triggered: deletes every other task currently on the dashboard (and their files). A separate, automatic version (`cleanup_old_tasks`) runs on a schedule via Celery beat, removing anything older than 24 hours. |
+
+---
+
+## Running it locally
+
+```bash
+git clone https://github.com/Yuktisingh2005/async-task-pipeline.git
+cd async-task-pipeline
+
+# Backend + broker + db, all in one command
+docker compose up --build
+
+# In a second terminal, run migrations
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py createsuperuser
+```
+
+Backend API: `http://localhost:8000/api/tasks/`
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Dashboard: `http://localhost:3000`
+
+---
+
+## Running it on Kubernetes (local)
+
+Uses Docker Desktop's built-in Kubernetes — no extra tools needed.
+
+```bash
+kubectl apply -f k8s/
+kubectl exec -it deploy/web -n async-pipeline -- python manage.py migrate
+kubectl port-forward -n async-pipeline svc/web 8081:8000
+```
+
+For observability (Flower / Prometheus / Grafana) and autoscaling setup, see [`docs/PROJECT_DOCUMENTATION.docx`](docs/PROJECT_DOCUMENTATION.docx) for the full step-by-step walkthrough.
+
+---
+
+## Deploying to AWS
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+This provisions a VPC, a 3-node EKS cluster (`t3.micro`, Free Tier eligible), RDS PostgreSQL, ElastiCache Redis, and an S3 bucket. Then:
+
+```bash
+aws eks update-kubeconfig --region us-east-1 --name async-pipeline-cluster
+kubectl apply -f k8s-cloud/
+```
+
+### Cost note
+
+This deploys real, billable AWS resources (EKS control plane, EC2 nodes, RDS, ElastiCache, and — if the `web` Service is set to `LoadBalancer` — an Elastic Load Balancer). **Run `terraform destroy` when not actively demoing** to avoid ongoing charges. See the full documentation for the complete teardown checklist (S3 must be emptied first; ECR repos are managed outside Terraform).
+
+---
+
+## Project structure
+
+```
+async-task-pipeline/
+├── backend/          # Django + DRF + Celery
+│   ├── config/        # settings, celery.py
+│   └── tasks/          # Task model, views, celery_tasks.py
+├── frontend/         # Next.js dashboard
+├── k8s/              # Kubernetes manifests (local cluster)
+├── k8s-cloud/         # Kubernetes manifests (AWS, RDS/ElastiCache/S3-backed)
+├── terraform/         # AWS infrastructure as code
+├── docker-compose.yml
+└── docs/               # Full project documentation + diagrams
+```
+
+---
+
+## What I'd do differently / next steps
+
+- Move from a dedicated IAM user + access keys (S3) to IRSA (IAM Roles for Service Accounts) for pod-level AWS permissions — more secure, no long-lived keys in a Secret
+- Add HTTPS via ACM + a real domain instead of the plain HTTP LoadBalancer
+- Swap the manual `AdministratorAccess` IAM policy (used for development convenience) for least-privilege policies before treating this as production-representative
+- Add a `celery-exporter` for per-task-type metrics in Grafana, beyond raw queue depth
+
+---
+
+## Full build log
+
+Every phase of this build — including the real debugging (Docker Desktop networking issues, Kubernetes stale image caches, AWS IAM/AMI/region/Free-Tier snags, an S3 ACL bug found and fixed) — is documented in [`docs/PROJECT_DOCUMENTATION.docx`](docs/PROJECT_DOCUMENTATION.docx).
