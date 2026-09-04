@@ -4,7 +4,6 @@ A production-shaped async task processing system: a Django/DRF API that offloads
 
 📹 **[Demo video](https://drive.google.com/file/d/1-3sjamQo_T3SYOxl2Krl5s2o5ITnUKw8/view?usp=sharing)** — Watch the demo video here.
 
-
 ---
 
 ## What this demonstrates
@@ -24,63 +23,66 @@ A production-shaped async task processing system: a Django/DRF API that offloads
 
 ### Application flow
 
-┌─────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│ Next.js │ POST │ Django REST API │ write │ PostgreSQL │
-│ Dashboard │──────▶│ (creates Task, │───────▶│ Task records, │
-│ (polls every 2s) │◀──────│ returns instantly)│ │ results, schedule│
-└─────────────────┘ GET └────────┬───────────┘ └──────────────────┘
-│ enqueue ▲
-▼ │
-┌──────────────┐ │
-│ Redis │ │
-│ task queue │ │
-└───────┬──────┘ │
-┌────────────┴────────────┐ │
-▼ ▼ │
-┌───────────────┐ ┌───────────────┐ │
-│ Celery Workers │ │ Celery Beat │ │
-│ (image resize, │ │ (scheduled │──────────┘
-│ PDF, cleanup) │ │ cleanup timer) │
-└───────┬───────┘ └───────────────┘
-│
-▼
-┌───────────────┐
-│ S3 (media) │
-│ shared storage │
-│ across pods │
-└───────────────┘
+```
+┌───────────────────┐        ┌────────────────────┐        ┌───────────────────┐
+│   Next.js           │  POST  │   Django REST API    │ write  │    PostgreSQL       │
+│   Dashboard          │──────▶│   (creates Task,       │───────▶│   Task records,      │
+│  (polls every 2s)    │◀──────│    returns instantly)  │        │   results, schedule  │
+└───────────────────┘  GET   └──────────┬─────────────┘        └───────────────────┘
+                                         │ enqueue                         ▲
+                                         ▼                                 │
+                                 ┌───────────────┐                         │
+                                 │     Redis       │                         │
+                                 │   task queue    │                         │
+                                 └───────┬────────┘                         │
+                            ┌────────────┴────────────┐                    │
+                            ▼                          ▼                    │
+                    ┌────────────────┐        ┌────────────────┐            │
+                    │ Celery Workers   │        │  Celery Beat     │            │
+                    │ (image resize,   │        │ (scheduled        │────────────┘
+                    │  PDF, cleanup)   │        │  cleanup timer)   │
+                    └────────┬───────┘        └────────────────┘
+                             │
+                             ▼
+                    ┌────────────────┐
+                    │  S3 (media)      │
+                    │ shared storage   │
+                    │ across pods      │
+                    └────────────────┘
+```
 
 **Request flow:** the frontend calls the Django API, which writes a `Task` row to PostgreSQL and enqueues a job onto Redis — then returns immediately. A Celery worker (running as a separate process/pod) picks the job off Redis, executes it, and writes the result back to PostgreSQL and S3. Celery beat runs independently on a timer, firing scheduled cleanup with no user involvement.
 
 ### Cloud infrastructure (AWS)
 
-           Internet
-                             │
-                             ▼
-
-┌──────────────────────────────────────────────────────────────────┐
-│ AWS VPC (10.0.0.0/16) │
-│ │
-│ ┌─────────────────── Public Subnets ───────────────────┐ │
-│ │ Elastic Load Balancer │ │
-│ └───────────────────────┬───────────────────────────────┘ │
-│ ▼ │
-│ ┌─────────────────── Private Subnets ──────────────────────────┐ │
-│ │ EKS Cluster (3 × t3.micro nodes) │ │
-│ │ ┌─────────┐ ┌─────────┐ ┌─────────┐ │ │
-│ │ │ web │ │ worker │ │ beat │ + HPA autoscaling │ │
-│ │ │ pod │ │ pods │ │ pod │ on queue depth │ │
-│ │ └────┬────┘ └────┬────┘ └─────────┘ │ │
-│ │ │ │ │ │
-│ └────────┼──────────────┼──────────────────────────────────────┘ │
-│ ▼ ▼ │
-│ ┌───────────────┐ ┌───────────────┐ │
-│ │ RDS PostgreSQL │ │ ElastiCache │ │
-│ │ db.t3.micro │ │ Redis │ │
-│ └───────────────┘ └───────────────┘ │
-│ │
-│ S3 (media storage) ECR (container images) │
-└──────────────────────────────────────────────────────────────────┘
+```
+                                Internet
+                                   │
+                                   ▼
+ ┌────────────────────────────────────────────────────────────────────┐
+ │ AWS VPC (10.0.0.0/16)                                                 │
+ │                                                                        │
+ │  ┌────────────────────  Public Subnets  ────────────────────┐          │
+ │  │              Elastic Load Balancer                         │          │
+ │  └─────────────────────────────┬───────────────────────────┘          │
+ │                                 ▼                                      │
+ │  ┌────────────────────  Private Subnets  ─────────────────────────┐    │
+ │  │   EKS Cluster (3 × t3.micro nodes)                                │    │
+ │  │   ┌──────────┐    ┌──────────┐    ┌──────────┐                    │    │
+ │  │   │   web      │    │  worker   │    │   beat     │   + HPA          │    │
+ │  │   │   pod      │    │   pods    │    │   pod      │   autoscaling    │    │
+ │  │   └─────┬────┘    └─────┬────┘    └──────────┘   on queue depth   │    │
+ │  │         │                │                                         │    │
+ │  └─────────┼────────────────┼─────────────────────────────────────┘    │
+ │            ▼                ▼                                          │
+ │    ┌────────────────┐  ┌────────────────┐                              │
+ │    │ RDS PostgreSQL   │  │ ElastiCache      │                              │
+ │    │  db.t3.micro     │  │ Redis            │                              │
+ │    └────────────────┘  └────────────────┘                              │
+ │                                                                          │
+ │          S3 (media storage)          ECR (container images)             │
+ └────────────────────────────────────────────────────────────────────┘
+```
 
 The application runs on a 3-node EKS cluster inside a VPC with public/private subnets. PostgreSQL and Redis are **not** run as pods — they're managed AWS services (RDS, ElastiCache) reached over the private network. Uploaded/generated files live in S3, not on any single pod's local disk, so any worker pod can read a file another pod wrote.
 
@@ -112,4 +114,93 @@ The application runs on a 3-node EKS cluster inside a VPC with public/private su
 
 ---
 
+## Running it locally
 
+```bash
+git clone https://github.com/Yuktisingh2005/async-task-pipeline.git
+cd async-task-pipeline
+
+# Backend + broker + db, all in one command
+docker compose up --build
+
+# In a second terminal, run migrations
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py createsuperuser
+```
+
+Backend API: `http://localhost:8000/api/tasks/`
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Dashboard: `http://localhost:3000`
+
+---
+
+## Running it on Kubernetes (local)
+
+Uses Docker Desktop's built-in Kubernetes — no extra tools needed.
+
+```bash
+kubectl apply -f k8s/
+kubectl exec -it deploy/web -n async-pipeline -- python manage.py migrate
+kubectl port-forward -n async-pipeline svc/web 8081:8000
+```
+
+For observability (Flower / Prometheus / Grafana) and autoscaling setup, see [`docs/PROJECT_DOCUMENTATION.docx`](docs/PROJECT_DOCUMENTATION.docx) for the full step-by-step walkthrough.
+
+---
+
+## Deploying to AWS
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+This provisions a VPC, a 3-node EKS cluster (`t3.micro`, Free Tier eligible), RDS PostgreSQL, ElastiCache Redis, and an S3 bucket. Then:
+
+```bash
+aws eks update-kubeconfig --region us-east-1 --name async-pipeline-cluster
+kubectl apply -f k8s-cloud/
+```
+
+### Cost note
+
+This deploys real, billable AWS resources (EKS control plane, EC2 nodes, RDS, ElastiCache, and — if the `web` Service is set to `LoadBalancer` — an Elastic Load Balancer). **Run `terraform destroy` when not actively demoing** to avoid ongoing charges. See the full documentation for the complete teardown checklist (S3 must be emptied first; ECR repos are managed outside Terraform).
+
+---
+
+## Project structure
+
+```
+async-task-pipeline/
+├── backend/          # Django + DRF + Celery
+│   ├── config/        # settings, celery.py
+│   └── tasks/          # Task model, views, celery_tasks.py
+├── frontend/         # Next.js dashboard
+├── k8s/              # Kubernetes manifests (local cluster)
+├── k8s-cloud/         # Kubernetes manifests (AWS, RDS/ElastiCache/S3-backed)
+├── terraform/         # AWS infrastructure as code
+├── docker-compose.yml
+└── docs/               # Full project documentation
+```
+
+---
+
+## What I'd do differently / next steps
+
+- Move from a dedicated IAM user + access keys (S3) to IRSA (IAM Roles for Service Accounts) for pod-level AWS permissions — more secure, no long-lived keys in a Secret
+- Add HTTPS via ACM + a real domain instead of the plain HTTP LoadBalancer
+- Swap the manual `AdministratorAccess` IAM policy (used for development convenience) for least-privilege policies before treating this as production-representative
+- Add a `celery-exporter` for per-task-type metrics in Grafana, beyond raw queue depth
+
+---
+
+## Full build log
+
+Every phase of this build — including the real debugging (Docker Desktop networking issues, Kubernetes stale image caches, AWS IAM/AMI/region/Free-Tier snags, an S3 ACL bug found and fixed) — is documented in [`docs/PROJECT_DOCUMENTATION.docx`](docs/PROJECT_DOCUMENTATION.docx).
