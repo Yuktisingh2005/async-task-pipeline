@@ -2,72 +2,7 @@
 
 A production-shaped async task processing system: a Django/DRF API that offloads heavy work (image resizing, PDF generation, scheduled cleanup) to Celery workers via Redis, with a live-updating Next.js dashboard, full observability (Flower, Prometheus, Grafana), Kubernetes autoscaling driven by a custom queue-depth metric, and a real deployment to AWS (EKS, RDS, ElastiCache, S3) provisioned with Terraform.
 
-**Demo video:** [\[link here\]](https://drive.google.com/file/d/1-3sjamQo_T3SYOxl2Krl5s2o5ITnUKw8/view?usp=sharing)
-
-## Architecture
-
-**Application flow**
-
-```mermaid
-flowchart LR
-    User(["User"]) --> UI["Next.js Dashboard"]
-    UI -- "REST API" --> API["Django REST API"]
-
-    API --> PG[("PostgreSQL")]
-    API -- "enqueue task" --> RD["Redis"]
-
-    RD --> W["Celery Workers"]
-    RD --> BT["Celery Beat\n(scheduled cleanup)"]
-
-    W -- "write results" --> PG
-    W -- "store files" --> S3[("S3 media")]
-    BT -. "fires cleanup task" .-> RD
-
-    classDef client fill:#0A0A0F,stroke:#60A5FA,color:#F5F5F7
-    classDef server fill:#0A0A0F,stroke:#8B5CF6,color:#F5F5F7
-    classDef store fill:#0A0A0F,stroke:#34D399,color:#F5F5F7
-    class User,UI client
-    class API,W,BT server
-    class PG,RD,S3 store
-```
-
-**AWS infrastructure**
-
-```mermaid
-flowchart LR
-    Internet(["Internet"]) --> ELB["Elastic Load\nBalancer"]
-    ELB --> WEBP["web pod"]
-
-    subgraph EKS["EKS Cluster — 3× t3.micro nodes"]
-        WEBP
-        WKP["worker pods"]
-        BTP["beat pod"]
-        HPA["HPA\n(scales on queue depth)"]
-        HPA -. "adjusts replicas" .-> WKP
-    end
-
-    WEBP --> RDS[("RDS\nPostgreSQL")]
-    WKP --> RDS
-    WEBP --> REDIS[("ElastiCache\nRedis")]
-    WKP --> REDIS
-    WKP --> S3B[("S3\nmedia storage")]
-    WEBP --> S3B
-
-    ECR[("ECR")] -. "pulls images" .-> EKS
-
-    classDef client fill:#0A0A0F,stroke:#60A5FA,color:#F5F5F7
-    classDef server fill:#0A0A0F,stroke:#8B5CF6,color:#F5F5F7
-    classDef store fill:#0A0A0F,stroke:#34D399,color:#F5F5F7
-    classDef scale fill:#0A0A0F,stroke:#FBBF24,color:#F5F5F7
-    class Internet,ELB client
-    class WEBP,WKP,BTP server
-    class RDS,REDIS,S3B,ECR store
-    class HPA scale
-```
-
-**Request flow:** the frontend calls the Django API, which writes a `Task` row to PostgreSQL and enqueues a job onto Redis — then returns immediately. A Celery worker (running as a separate process/pod) picks the job off Redis, executes it, and writes the result back to PostgreSQL and S3. Celery beat runs independently on a timer, firing scheduled cleanup with no user involvement.
-
-The application runs on a 3-node EKS cluster inside a VPC with public/private subnets. PostgreSQL and Redis are **not** run as pods — they're managed AWS services (RDS, ElastiCache) reached over the private network. Uploaded/generated files live in S3, not on any single pod's local disk, so any worker pod can read a file another pod wrote. The HPA (Horizontal Pod Autoscaler) watches queue depth via Prometheus and scales the worker pods up or down automatically.
+📹 **[Demo video](https://drive.google.com/file/d/1-3sjamQo_T3SYOxl2Krl5s2o5ITnUKw8/view?usp=sharing)** — Watch the demo video here.
 
 ---
 
@@ -81,6 +16,22 @@ The application runs on a 3-node EKS cluster inside a VPC with public/private su
 - **Autoscaling on a business metric** — not CPU, but actual queue depth, via a custom Prometheus Adapter + HPA
 - **Infrastructure as Code** — the entire cloud footprint (VPC, EKS, RDS, ElastiCache, S3, IAM) is Terraform, not console clicks
 - **Real cloud deployment** — a public, internet-reachable URL backed by managed AWS services, not just `localhost`
+
+---
+
+## Architecture
+
+### Application
+
+![Application architecture](architecture-app.png)
+
+**Request flow:** the frontend calls the Django API, which writes a `Task` row to PostgreSQL and enqueues a job onto Redis — then returns immediately. A Celery worker (running as a separate process/pod) picks the job off Redis, executes it, and writes the result back to PostgreSQL and S3. Celery beat runs independently on a timer, firing scheduled cleanup with no user involvement.
+
+### Cloud infrastructure
+
+![AWS infrastructure](architecture-aws.png)
+
+The application runs on an EKS cluster sitting behind a public Load Balancer. PostgreSQL and Redis are **not** run as pods — they're managed AWS services (RDS, ElastiCache) reached over the private network. Uploaded/generated files live in S3, not on any single pod's local disk, so any worker pod can read a file another pod wrote. Container images are pulled from ECR.
 
 ---
 
@@ -175,6 +126,8 @@ This deploys real, billable AWS resources (EKS control plane, EC2 nodes, RDS, El
 
 ```
 async-task-pipeline/
+├── architecture-app.png
+├── architecture-aws.png
 ├── backend/          # Django + DRF + Celery
 │   ├── config/        # settings, celery.py
 │   └── tasks/          # Task model, views, celery_tasks.py
